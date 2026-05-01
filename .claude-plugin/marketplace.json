@@ -1,0 +1,19 @@
+{
+  "name": "claude-tokmon",
+  "owner": {
+    "name": "wjf"
+  },
+  "metadata": {
+    "description": "Token usage monitor for Claude Code - session token stats with cache breakdown, multi-platform quota tracking",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-tokmon",
+      "source": "./",
+      "description": "Session token statistics with cache breakdown (input/output/read/write), context progress bar, Git status, and GLM/Kimi/MiniMax quota tracking. Multi-line statusline display.",
+      "category": "monitoring",
+      "tags": ["token", "monitor", "statusline", "usage", "glm", "kimi", "minimax", "cache", "context"]
+    }
+  ]
+}
