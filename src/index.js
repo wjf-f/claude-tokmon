@@ -14,7 +14,8 @@
 //
 // 各段说明：
 //   第 1 行：
-//     M:<模型名>              - 当前使用的 AI 模型
+//     M:<模型名>              - 优先取 transcript 中最近一次的 message.model（真实模型），
+//                               回退到 stdin 的 model.id（新会话还没有响应时）
 //     ████░░░░ N%             - 上下文窗口使用进度条 + 百分比
 //     D:<目录>                - 当前工作目录（取最后两级）
 //     <分支图标> <分支名>     - Git 分支 + 状态（* 修改 / ? 未跟踪 / ! 冲突）
@@ -28,7 +29,10 @@
 //     7d N% · dHH              - 周限量使用率 + 重置倒计时
 //     MCP N/N                  - 30天 MCP 工具调用次数
 //
-// 用量追踪（仅在使用对应模型时显示）：
+// 用量追踪（按 ANTHROPIC_BASE_URL 域名自动识别平台后显示，未匹配则不显示第 3 行）：
+//   bigmodel.cn / zhipu / z.ai          → GLM
+//   kimi.com                            → Kimi
+//   minimaxi.com / minimax.io           → MiniMax
 //
 // 【GLM - 智谱/ZAI】
 //   🪙 N% (⏰ HH:MM)       - 5h Token 配额使用率 + 下次重置时间
@@ -199,6 +203,7 @@ function parseTranscriptTokens(transcriptPath) {
             input: cached.input, output: cached.output,
             cacheRead: cached.cacheRead, cacheCreation: cached.cacheCreation,
             total: cached.input + cached.output + cached.cacheRead + cached.cacheCreation,
+            lastModel: cached.lastModel || null,
         };
     }
 
@@ -206,10 +211,11 @@ function parseTranscriptTokens(transcriptPath) {
     const isNewFile = !cached || cached.path !== transcriptPath;
     const offset = (isNewFile || stat.size < (cached.offset || 0)) ? 0 : (cached.offset || 0);
     const acc = (offset === 0)
-        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
+        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null }
         : {
             input: cached.input || 0, output: cached.output || 0,
             cacheRead: cached.cacheRead || 0, cacheCreation: cached.cacheCreation || 0,
+            lastModel: cached.lastModel || null,
         };
 
     try {
@@ -238,6 +244,8 @@ function parseTranscriptTokens(transcriptPath) {
                         acc.cacheCreation += u.cache_creation_input_tokens || 0;
                     }
                     prevKey = key;
+                    // 记录最近一次的真实模型（API 实际返回的模型名）
+                    if (entry.message.model) acc.lastModel = entry.message.model;
                 }
             } catch (_) {}
         }
@@ -246,6 +254,7 @@ function parseTranscriptTokens(transcriptPath) {
             path: transcriptPath, offset: stat.size, size: stat.size,
             input: acc.input, output: acc.output,
             cacheRead: acc.cacheRead, cacheCreation: acc.cacheCreation,
+            lastModel: acc.lastModel,
         };
         writeTranscriptCache(result);
 
@@ -253,6 +262,7 @@ function parseTranscriptTokens(transcriptPath) {
             input: acc.input, output: acc.output,
             cacheRead: acc.cacheRead, cacheCreation: acc.cacheCreation,
             total: acc.input + acc.output + acc.cacheRead + acc.cacheCreation,
+            lastModel: acc.lastModel,
         };
     } catch (_) {
         return null;
@@ -761,10 +771,16 @@ process.stdin.on('end', async () => {
         return;
     }
 
-    const modelId = data.model?.id || 'unknown';
+    const stdinModelId = data.model?.id || 'unknown';
     const cwd = data.workspace?.current_dir || process.cwd();
     const ctx = data.context_window || {};
     const transcriptPath = data.transcript_path;
+
+    // 先解析 transcript：拿到真实模型 + token 累计
+    // API 代理模式（Kimi/GLM/MiniMax）下 stdin 的 model.id 仍是 claude-*，
+    // 而 Anthropic 响应里的 message.model 才是真实模型（如 kimi-for-coding）。
+    const transcript = parseTranscriptTokens(transcriptPath);
+    const modelId = (transcript && transcript.lastModel) || stdinModelId;
 
     const pct = getContextPercent(ctx);
     const bar = coloredBar(pct);
@@ -794,7 +810,6 @@ process.stdin.on('end', async () => {
     console.log(line1.join(' '));
 
     // 第 2 行：会话 Token 统计（从 transcript JSONL 解析，含 cache 细分）
-    const transcript = parseTranscriptTokens(transcriptPath);
     const line2 = [];
     if (transcript && transcript.total > 0) {
         line2.push(`${COLORS.blue}${I18N.input}:${formatTokens(transcript.input)}${COLORS.reset}`);
@@ -816,19 +831,16 @@ process.stdin.on('end', async () => {
         console.log(line2.join(' '));
     }
 
-    // 第 3 行：平台用量追踪（仅在使用对应模型时显示）
-    const modelLower = modelId.toLowerCase();
+    // 第 3 行：平台用量追踪（根据 ANTHROPIC_BASE_URL 自动识别平台）
+    const baseUrl = (process.env.ANTHROPIC_BASE_URL || '').toLowerCase();
     let usageLine = null;
 
-    if (modelLower.includes('glm') || modelLower.includes('chatglm')) {
-        const glmStats = await fetchGlmUsage();
-        usageLine = formatGlmUsage(glmStats);
-    } else if (modelLower.includes('kimi')) {
-        const kimiStats = await fetchKimiUsage();
-        usageLine = formatKimiUsage(kimiStats);
-    } else if (modelLower.includes('minimax')) {
-        const minimaxStats = await fetchMiniMaxUsage();
-        usageLine = formatMiniMaxUsage(minimaxStats);
+    if (baseUrl.includes('bigmodel.cn') || baseUrl.includes('zhipu') || baseUrl.includes('z.ai')) {
+        usageLine = formatGlmUsage(await fetchGlmUsage());
+    } else if (baseUrl.includes('kimi.com')) {
+        usageLine = formatKimiUsage(await fetchKimiUsage());
+    } else if (baseUrl.includes('minimaxi.com') || baseUrl.includes('minimax.io')) {
+        usageLine = formatMiniMaxUsage(await fetchMiniMaxUsage());
     }
 
     if (usageLine) {

@@ -32,15 +32,16 @@ In:1.5k  Out:800  CacheR:170.0k  CacheW:7.0k  Total:178.1k
 
 - **第 1 行** — 模型名、上下文进度条（CTX）、工作目录、Git 分支状态
 - **第 2 行** — 会话 Token 统计（输入 / 输出 / 读缓存 / 写缓存 / 总计）
-- **第 3 行** — 平台套餐用量（根据模型名自动识别，仅 GLM/Kimi/MiniMax 显示）
+- **第 3 行** — 平台套餐用量（仅在 `ANTHROPIC_BASE_URL` 匹配 GLM/Kimi/MiniMax 时显示）
 
 ## 说明
 
 **零配置**，无需设置任何环境变量。插件从 Claude Code 自身的配置中自动读取：
 
-- 模型名、上下文使用量、工作目录 — 来自 Claude Code 的 stdin JSON
+- 模型名 — 从 transcript JSONL 最近一条 `message.model` 取（这样 Kimi 等 API 代理场景能显示真实模型，而不是 `claude-*`）；新会话还没响应时回退到 stdin 的 `model.id`
+- 上下文使用量、工作目录 — 来自 Claude Code 的 stdin JSON
 - Token 统计 — 解析 transcript JSONL 文件，支持增量缓存
-- 平台配额 — 根据模型名自动识别平台，使用 Claude Code 已配置的 API 凭证
+- 平台配额 — 按 `ANTHROPIC_BASE_URL` 域名识别平台（`bigmodel.cn` / `z.ai` → GLM，`kimi.com` → Kimi，`minimaxi.com` / `minimax.io` → MiniMax），复用 Claude Code 已有的 API 凭证
 
 ## 语言
 
@@ -62,13 +63,13 @@ In:1.5k  Out:800  CacheR:170.0k  CacheW:7.0k  Total:178.1k
 
 ## 平台用量追踪
 
-根据当前使用的模型自动显示对应平台的套餐用量：
+根据 `ANTHROPIC_BASE_URL` 自动识别平台并显示对应套餐用量：
 
-| 平台 | 模型关键词 | 显示内容 |
-|------|-----------|---------|
-| GLM（智谱/ZAI） | `glm`、`chatglm` | 5h Token 配额、API 调用次数、周限量、MCP 用量 |
-| Kimi | `kimi` | 4h 窗口用量、周限量 |
-| MiniMax | `minimax` | 5h 区间用量/调用次数、周限量 |
+| 平台 | baseUrl 域名 | 显示内容 |
+|------|-------------|---------|
+| GLM（智谱/ZAI） | `bigmodel.cn` / `zhipu` / `z.ai` | 5h Token 配额、API 调用次数、周限量、MCP 用量 |
+| Kimi | `kimi.com` | 4h 窗口用量、周限量 |
+| MiniMax | `minimaxi.com` / `minimax.io` | 5h 区间用量/调用次数、周限量 |
 
 颜色阈值：绿色 <70% / 橙色 70-89% / 红色 ≥90%
 

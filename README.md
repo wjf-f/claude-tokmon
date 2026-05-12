@@ -30,15 +30,16 @@ M:glm-5.1  CTX ████░░░░ 45%  │  D:my-project  󰊢 dev*
 
 - **Line 1** — Model, context progress bar (CTX), working directory, Git branch status
 - **Line 2** — Session token breakdown (input / output / cache read / cache write / total)
-- **Line 3** — Platform quota usage (auto-detected, only shown for GLM/Kimi/MiniMax)
+- **Line 3** — Platform quota usage (shown when `ANTHROPIC_BASE_URL` matches GLM/Kimi/MiniMax)
 
 ## How it works
 
 Zero configuration required. The plugin reads everything from Claude Code's existing setup:
 
-- Model name, context usage, working directory — from Claude Code stdin JSON
+- Model name — taken from the most recent `message.model` in the transcript JSONL (so API-proxy setups like Kimi show the real upstream model, not `claude-*`); falls back to stdin `model.id` for fresh sessions
+- Context usage, working directory — from Claude Code stdin JSON
 - Token statistics — parsed from transcript JSONL files with incremental caching
-- Platform quota — auto-detected by model name, uses Claude Code's own API credentials
+- Platform quota — platform detected via `ANTHROPIC_BASE_URL` domain (`bigmodel.cn` / `z.ai` → GLM, `kimi.com` → Kimi, `minimaxi.com` / `minimax.io` → MiniMax); reuses Claude Code's existing API credentials
 
 ## Language
 
