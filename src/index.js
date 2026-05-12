@@ -89,8 +89,8 @@ const _locale = process.env.TOKMON_LANG
     || 'en';
 const LANG = _locale.toLowerCase();
 const I18N = LANG.startsWith('zh')
-    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', compact: 'COMPACT' }
-    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', compact: 'COMPACT' };
+    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', hitRate: '命中', cacheEff: '效率', requests: '请求', tools: '工具', compact: 'COMPACT' }
+    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', hitRate: 'Hit', cacheEff: 'Eff', requests: 'Req', tools: 'Tools', compact: 'COMPACT' };
 
 // 256 色调色板（Powerline 风格）
 const COLORS = {
@@ -189,7 +189,9 @@ function writeTranscriptCache(data) {
 /**
  * 解析 transcript JSONL 文件，累计 token 用量
  * @param {string} transcriptPath - JSONL 文件路径
- * @returns {{ input, output, cacheRead, cacheCreation, total } | null}
+ * @returns {{input, output, cacheRead, cacheCreation, total, lastModel, thisQuery} | null}
+ *   thisQuery 形如 { input, cacheRead, cacheCreation, requests, tools }，统计本轮 query
+ *   （从最后一条真实用户输入到现在）的所有 LLM 请求。
  */
 function parseTranscriptTokens(transcriptPath) {
     if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
@@ -204,18 +206,24 @@ function parseTranscriptTokens(transcriptPath) {
             cacheRead: cached.cacheRead, cacheCreation: cached.cacheCreation,
             total: cached.input + cached.output + cached.cacheRead + cached.cacheCreation,
             lastModel: cached.lastModel || null,
+            thisQuery: cached.thisQuery || null,
         };
     }
 
-    // 文件路径变了或文件缩小（压缩）→ 全量重算；文件变大 → 增量解析
-    const isNewFile = !cached || cached.path !== transcriptPath;
-    const offset = (isNewFile || stat.size < (cached.offset || 0)) ? 0 : (cached.offset || 0);
+    // 老缓存可能缺 thisQuery（旧 schema）→ 触发全量重算，否则本轮统计会丢失 offset 之前的部分
+    const cacheUsable = cached
+        && cached.path === transcriptPath
+        && cached.thisQuery !== undefined;
+    const offset = (cacheUsable && stat.size >= (cached.offset || 0)) ? (cached.offset || 0) : 0;
+    const emptyQuery = () => ({ input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 });
     const acc = (offset === 0)
-        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null }
+        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null }
         : {
             input: cached.input || 0, output: cached.output || 0,
             cacheRead: cached.cacheRead || 0, cacheCreation: cached.cacheCreation || 0,
             lastModel: cached.lastModel || null,
+            thisQuery: cached.thisQuery || emptyQuery(),
+            lastMsgId: cached.lastMsgId || null,
         };
 
     try {
@@ -228,22 +236,39 @@ function parseTranscriptTokens(transcriptPath) {
         const newContent = buf.toString('utf8');
         const lines = newContent.split('\n');
 
-        // 去重：跳过连续重复的 assistant usage 条目（transcript bug）
-        let prevKey = null;
+        // 去重：同一次 LLM 响应（共享 message.id）会被 Claude Code 拆成多条 entries
+        // （thinking / text / tool_use 各一条），每条都带完整 usage。按 message.id 去重，
+        // usage/requests 只在新 id 时累加；tool_use 计数始终累加（每个 block 只出现在自己的 entry）
+        // lastMsgId 跨增量调用持久化，防止 flush 切在同一 msg 的多条 entries 之间导致重复累加
         for (const line of lines) {
             if (!line.trim()) continue;
             try {
                 const entry = JSON.parse(line);
-                if (entry.type === 'assistant' && entry.message?.usage) {
+                if (entry.type === 'user' && typeof entry.message?.content === 'string') {
+                    // 真实用户输入（content 是字符串）→ 开启新一轮 query，重置本轮统计
+                    // 工具回执（content 是 tool_result 数组）不算 query 边界
+                    acc.thisQuery = { input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 };
+                    acc.lastMsgId = null;
+                } else if (entry.type === 'assistant' && entry.message?.usage) {
                     const u = entry.message.usage;
-                    const key = `${u.input_tokens || 0},${u.output_tokens || 0},${u.cache_read_input_tokens || 0},${u.cache_creation_input_tokens || 0}`;
-                    if (key !== prevKey) {
+                    const msgId = entry.message.id || null;
+                    if (msgId && msgId !== acc.lastMsgId) {
                         acc.input += u.input_tokens || 0;
                         acc.output += u.output_tokens || 0;
                         acc.cacheRead += u.cache_read_input_tokens || 0;
                         acc.cacheCreation += u.cache_creation_input_tokens || 0;
+                        acc.thisQuery.input += u.input_tokens || 0;
+                        acc.thisQuery.cacheRead += u.cache_read_input_tokens || 0;
+                        acc.thisQuery.cacheCreation += u.cache_creation_input_tokens || 0;
+                        acc.thisQuery.requests += 1;
                     }
-                    prevKey = key;
+                    acc.lastMsgId = msgId;
+                    // tool_use 计数（与去重无关，每个 block 在 transcript 中只出现一次）
+                    if (Array.isArray(entry.message.content)) {
+                        for (const block of entry.message.content) {
+                            if (block && block.type === 'tool_use') acc.thisQuery.tools += 1;
+                        }
+                    }
                     // 记录最近一次的真实模型（API 实际返回的模型名）
                     if (entry.message.model) acc.lastModel = entry.message.model;
                 }
@@ -255,6 +280,8 @@ function parseTranscriptTokens(transcriptPath) {
             input: acc.input, output: acc.output,
             cacheRead: acc.cacheRead, cacheCreation: acc.cacheCreation,
             lastModel: acc.lastModel,
+            thisQuery: acc.thisQuery,
+            lastMsgId: acc.lastMsgId,
         };
         writeTranscriptCache(result);
 
@@ -263,6 +290,7 @@ function parseTranscriptTokens(transcriptPath) {
             cacheRead: acc.cacheRead, cacheCreation: acc.cacheCreation,
             total: acc.input + acc.output + acc.cacheRead + acc.cacheCreation,
             lastModel: acc.lastModel,
+            thisQuery: acc.thisQuery,
         };
     } catch (_) {
         return null;
@@ -566,6 +594,13 @@ function getUsageColor(pct) {
     return COLORS.green;                    // 绿色：<70% 用量充足
 }
 
+/** 缓存命中率颜色：越高越好（越高越省 token） */
+function getHitRateColor(pct) {
+    if (pct >= 80) return COLORS.green;     // ≥80% 命中良好
+    if (pct >= 50) return COLORS.yellow;    // 50-79% 一般
+    return COLORS.red;                      // <50% 命中差
+}
+
 /** 格式化 GLM 用量为 statusline 文本 */
 function formatGlmUsage(stats) {
     if (!stats) return null;
@@ -817,6 +852,30 @@ process.stdin.on('end', async () => {
         if (transcript.cacheRead > 0) line2.push(`${COLORS.green}${I18N.cacheRead}:${formatTokens(transcript.cacheRead)}${COLORS.reset}`);
         if (transcript.cacheCreation > 0) line2.push(`${COLORS.cyan}${I18N.cacheCreation}:${formatTokens(transcript.cacheCreation)}${COLORS.reset}`);
         line2.push(`${COLORS.dim}${I18N.total}:${formatTokens(transcript.total)}${COLORS.reset}`);
+
+        // 本轮 query 指标：请求次数 / 工具调用次数 / 缓存命中率 / 缓存效率
+        // （statusline 实时监控以"本轮 query 触发的所有 API 请求"为窗口，而非整次会话累计或单次最末请求）
+        const tq = transcript.thisQuery;
+        if (tq && tq.requests > 0) {
+            line2.push(`${COLORS.magenta}${I18N.requests}:${tq.requests}${COLORS.reset}`);
+            if (tq.tools > 0) {
+                line2.push(`${COLORS.cyan}${I18N.tools}:${tq.tools}${COLORS.reset}`);
+            }
+            const promptTotal = tq.input + tq.cacheRead + tq.cacheCreation;
+            if (promptTotal > 0 && tq.cacheRead > 0) {
+                const hitPct = Math.round((tq.cacheRead / promptTotal) * 100);
+                const hitColor = getHitRateColor(hitPct);
+                line2.push(`${hitColor}${I18N.hitRate}:${hitPct}%${COLORS.reset}`);
+
+                // 缓存效率：只在代理/API 上报了 cache_creation 时才有诊断意义
+                // （否则恒为 100%，对 Kimi 这类不上报 cc 的代理无意义）
+                if (tq.cacheCreation > 0) {
+                    const effPct = Math.round((tq.cacheRead / (tq.cacheRead + tq.cacheCreation)) * 100);
+                    const effColor = getHitRateColor(effPct);
+                    line2.push(`${effColor}${I18N.cacheEff}:${effPct}%${COLORS.reset}`);
+                }
+            }
+        }
     } else {
         // fallback：用 stdin 的累计值
         const totalIn = ctx.total_input_tokens || 0;
