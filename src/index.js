@@ -47,7 +47,7 @@
 //     新套餐（有周限量）：Lite 1200次/5h+6000/周, Pro 6000次/5h+30000/周, Max 24000次/5h+120000/周
 //
 // 【Kimi】
-//   🪙 N% (⏰ HH:MM)       - 4h 用量百分比 + 重置时间
+//   🪙 N% (⏰ HH:MM)       - 5h 用量百分比 + 重置时间
 //   📅 N%                   - 周用量百分比（Kimi 始终有周限制）
 //   颜色规则：绿色 <80% / 黄色 80-94% / 红色 ≥95%
 //
@@ -431,7 +431,7 @@ async function fetchGlmUsage() {
 // API 端点：{domain}/coding/v1/usages
 //
 // Kimi 始终有两个窗口：
-//   - 4h 窗口（duration=300, time_unit=TIME_UNIT_MINUTE）
+//   - 5h 窗口（duration=300, time_unit=TIME_UNIT_MINUTE）
 //   - 周窗口（duration=10080）
 
 /** 获取 Kimi 用量统计 */
@@ -464,8 +464,8 @@ async function fetchKimiUsage() {
 
         const limits = body.limits || [];
 
-        // 4h 窗口：duration=300, timeUnit=TIME_UNIT_MINUTE（注意 API 使用驼峰命名）
-        const fourHour = limits.find(l => l.window?.duration === 300 && l.window?.timeUnit === 'TIME_UNIT_MINUTE');
+        // 5h 窗口：duration=300, timeUnit=TIME_UNIT_MINUTE（注意 API 使用驼峰命名）
+        const fiveHour = limits.find(l => l.window?.duration === 300 && l.window?.timeUnit === 'TIME_UNIT_MINUTE');
         // 周窗口：Kimi 返回在 body.usage，不在 limits 数组里
         const weekly = body.usage
             ? { detail: body.usage }
@@ -482,8 +482,8 @@ async function fetchKimiUsage() {
         };
 
         const stats = {
-            fourHourPct: calcPct(fourHour),
-            fourHourResetTs: fourHour?.detail?.resetTime ? new Date(fourHour.detail.resetTime).getTime() : null,
+            fiveHourPct: calcPct(fiveHour),
+            fiveHourResetTs: fiveHour?.detail?.resetTime ? new Date(fiveHour.detail.resetTime).getTime() : null,
             weeklyPct: weekly ? calcPct(weekly) : null,  // 无周窗口时为 null
             weeklyResetTs: weekly?.detail?.resetTime ? new Date(weekly.detail.resetTime).getTime() : null,
         };
@@ -660,9 +660,12 @@ function formatKimiUsage(stats) {
     const parts = [];
 
     // cc-switch 风格：百分比 + 重置倒计时
-    const color4h = getUsageColor(stats.fourHourPct);
-    const remain4h = formatTimeRemaining(stats.fourHourResetTs);
-    parts.push(remain4h ? `4h ${color4h}${stats.fourHourPct}% · ${remain4h}${COLORS.reset}` : `4h ${color4h}${stats.fourHourPct}%${COLORS.reset}`);
+    // 兼容旧缓存字段名(fourHour*),迁移期内继续读取,直到下次 fetch 覆盖
+    const pct5h = stats.fiveHourPct ?? stats.fourHourPct;
+    const resetTs5h = stats.fiveHourResetTs ?? stats.fourHourResetTs;
+    const color5h = getUsageColor(pct5h);
+    const remain5h = formatTimeRemaining(resetTs5h);
+    parts.push(remain5h ? `5h ${color5h}${pct5h}% · ${remain5h}${COLORS.reset}` : `5h ${color5h}${pct5h}%${COLORS.reset}`);
 
     if (stats.weeklyPct != null) {
         const colorW = getUsageColor(stats.weeklyPct);

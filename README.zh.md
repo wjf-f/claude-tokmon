@@ -68,7 +68,7 @@ In:1.5k  Out:800  CacheR:170.0k  CacheW:7.0k  Total:178.1k
 | 平台 | baseUrl 域名 | 显示内容 |
 |------|-------------|---------|
 | GLM（智谱/ZAI） | `bigmodel.cn` / `zhipu` / `z.ai` | 5h Token 配额、API 调用次数、周限量、MCP 用量 |
-| Kimi | `kimi.com` | 4h 窗口用量、周限量 |
+| Kimi | `kimi.com` | 5h 窗口用量、周限量 |
 | MiniMax | `minimaxi.com` / `minimax.io` | 5h 区间用量/调用次数、周限量 |
 
 颜色阈值：绿色 <70% / 橙色 70-89% / 红色 ≥90%
