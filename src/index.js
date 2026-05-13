@@ -628,7 +628,7 @@ function formatTokenCount(n) {
 /** 根据百分比返回用量颜色（cc-switch 标准） */
 function getUsageColor(pct) {
     if (pct >= 90) return COLORS.red;       // 红色：≥90% 即将耗尽
-    if (pct >= 70) return '[38;5;208m'; // 橙色：70-89% 注意用量
+    if (pct >= 70) return '\x1b[38;5;208m'; // 橙色：70-89% 注意用量
     return COLORS.green;                    // 绿色：<70% 用量充足
 }
 
