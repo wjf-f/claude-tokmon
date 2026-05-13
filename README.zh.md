@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-Claude Code Token 用量监控插件 — 会话 Token 统计（含缓存细分）、上下文进度条、Git 状态、多平台配额追踪。
+Claude Code Token 用量监控插件 — 会话 Token 统计（含缓存细分）、本轮请求分析、上下文进度条、Git 状态、多平台配额追踪。
 
 ## 安装
 
@@ -19,29 +19,30 @@ Claude Code Token 用量监控插件 — 会话 Token 统计（含缓存细分�
 **中文**（中文系统自动显示）：
 ```
 M:glm-5.1  CTX ████░░░░ 45%  │  D:my-project  󰊢 dev*
-输入:1.5k  输出:800  读缓存:170.0k  写缓存:7.0k  总计:178.1k
+输入:397.8k  输出:24.3k  读缓存:2.5M  总计:2.9M  请求:16  工具:16  命中:92%
 5h 3% · 1h28m  12次  7d 15% · 2d7h  MCP 50/300  3.38M
 ```
 
 **English** (English systems):
 ```
 M:glm-5.1  CTX ████░░░░ 45%  │  D:my-project  󰊢 dev*
-In:1.5k  Out:800  CacheR:170.0k  CacheW:7.0k  Total:178.1k
+In:397.8k  Out:24.3k  CacheR:2.5M  Total:2.9M  Req:16  Tools:16  Hit:92%
 5h 3% · 1h28m  12次  7d 15% · 2d7h  MCP 50/300  3.38M
 ```
 
 - **第 1 行** — 模型名、上下文进度条（CTX）、工作目录、Git 分支状态
-- **第 2 行** — 会话 Token 统计（输入 / 输出 / 读缓存 / 写缓存 / 总计）
+- **第 2 行** — 会话 Token 统计 + 本轮请求分析（请求次数、工具调用、缓存命中率）
 - **第 3 行** — 平台套餐用量（仅在 `ANTHROPIC_BASE_URL` 匹配 GLM/Kimi/MiniMax 时显示）
 
 ## 说明
 
 **零配置**，无需设置任何环境变量。插件从 Claude Code 自身的配置中自动读取：
 
-- 模型名 — 从 transcript JSONL 最近一条 `message.model` 取（这样 Kimi 等 API 代理场景能显示真实模型，而不是 `claude-*`）；新会话还没响应时回退到 stdin 的 `model.id`
-- 上下文使用量、工作目录 — 来自 Claude Code 的 stdin JSON
-- Token 统计 — 解析 transcript JSONL 文件，支持增量缓存
-- 平台配额 — 按 `ANTHROPIC_BASE_URL` 域名识别平台（`bigmodel.cn` / `z.ai` → GLM，`kimi.com` → Kimi，`minimaxi.com` / `minimax.io` → MiniMax），复用 Claude Code 已有的 API 凭证
+- 模型名 — 从 transcript JSONL 最近一条 `message.model` 取（API 代理场景显示真实模型，而非 `claude-*`）；新会话回退到 stdin 的 `model.id`
+- 上下文使用量、工作目录 — 来自 Claude Code stdin JSON
+- Token 统计 — 解析 transcript JSONL 文件，增量缓存 + 按 `message.id` 去重（处理 thinking/text/tool_use 分片和并行工具调用）
+- 本轮请求分析 — 从最后一条用户输入开始，统计该轮所有 LLM 请求的请求次数、工具调用数、缓存命中率
+- 平台配额 — 按 `ANTHROPIC_BASE_URL` 域名识别平台，复用 Claude Code 已有的 API 凭证
 
 ## 语言
 
@@ -53,6 +54,8 @@ In:1.5k  Out:800  CacheR:170.0k  CacheW:7.0k  Total:178.1k
 
 ## Token 字段说明
 
+### 会话累计（第 2 行前半段）
+
 | 字段（中文） | 字段（English） | 含义 |
 |-------------|----------------|------|
 | 输入 | In | 非缓存的输入 Token |
@@ -60,6 +63,17 @@ In:1.5k  Out:800  CacheR:170.0k  CacheW:7.0k  Total:178.1k
 | 读缓存 | CacheR | 从 prompt cache 读取的 Token |
 | 写缓存 | CacheW | 写入 prompt cache 的 Token |
 | 总计 | Total | 以上四项之和 |
+
+### 本轮请求分析（第 2 行后半段）
+
+| 字段（中文） | 字段（English） | 含义 |
+|-------------|----------------|------|
+| 请求 | Req | 本轮 query 触发的 LLM 请求次数 |
+| 工具 | Tools | 本轮调用的工具次数 |
+| 命中 | Hit | 缓存命中率 = cacheRead / (input + cacheRead + cacheCreation) |
+| 效率 | Eff | 缓存效率 = cacheRead / (cacheRead + cacheCreation)，仅在有 cacheCreation 时显示 |
+
+> **本轮 query** = 从最后一条用户输入开始，包含所有后续的 LLM 请求（含工具调用链），直到下一次用户输入重置。
 
 ## 平台用量追踪
 

@@ -217,13 +217,14 @@ function parseTranscriptTokens(transcriptPath) {
     const offset = (cacheUsable && stat.size >= (cached.offset || 0)) ? (cached.offset || 0) : 0;
     const emptyQuery = () => ({ input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 });
     const acc = (offset === 0)
-        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null }
+        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null, thisMsgUsage: null }
         : {
             input: cached.input || 0, output: cached.output || 0,
             cacheRead: cached.cacheRead || 0, cacheCreation: cached.cacheCreation || 0,
             lastModel: cached.lastModel || null,
             thisQuery: cached.thisQuery || emptyQuery(),
             lastMsgId: cached.lastMsgId || null,
+            thisMsgUsage: cached.thisMsgUsage || null,
         };
 
     try {
@@ -252,15 +253,51 @@ function parseTranscriptTokens(transcriptPath) {
                 } else if (entry.type === 'assistant' && entry.message?.usage) {
                     const u = entry.message.usage;
                     const msgId = entry.message.id || null;
+                    // 同一 msgId 可能有多条 entries（thinking/text/tool_use）。
+                    // thinking block 的 usage 是中间态（缺 cache/output），
+                    // text/tool_use 的 usage 是完整态。
+                    // 策略：同 msgId 用"减旧加新"更新累计值和 thisQuery，
+                    // requests 只计一次。
                     if (msgId && msgId !== acc.lastMsgId) {
-                        acc.input += u.input_tokens || 0;
-                        acc.output += u.output_tokens || 0;
-                        acc.cacheRead += u.cache_read_input_tokens || 0;
-                        acc.cacheCreation += u.cache_creation_input_tokens || 0;
-                        acc.thisQuery.input += u.input_tokens || 0;
-                        acc.thisQuery.cacheRead += u.cache_read_input_tokens || 0;
-                        acc.thisQuery.cacheCreation += u.cache_creation_input_tokens || 0;
+                        // 新 msgId → 开始累计
+                        acc.thisMsgUsage = {
+                            input: u.input_tokens || 0,
+                            output: u.output_tokens || 0,
+                            cacheRead: u.cache_read_input_tokens || 0,
+                            cacheCreation: u.cache_creation_input_tokens || 0,
+                        };
+                        acc.input += acc.thisMsgUsage.input;
+                        acc.output += acc.thisMsgUsage.output;
+                        acc.cacheRead += acc.thisMsgUsage.cacheRead;
+                        acc.cacheCreation += acc.thisMsgUsage.cacheCreation;
+                        // thisQuery 累加（一轮 query 可能有多个 assistant 请求）
+                        acc.thisQuery.input += acc.thisMsgUsage.input;
+                        acc.thisQuery.cacheRead += acc.thisMsgUsage.cacheRead;
+                        acc.thisQuery.cacheCreation += acc.thisMsgUsage.cacheCreation;
                         acc.thisQuery.requests += 1;
+                    } else if (msgId && msgId === acc.lastMsgId && acc.thisMsgUsage) {
+                        // 同 msgId → 判断是否有更完整的 usage
+                        const newUsage = {
+                            input: u.input_tokens || 0,
+                            output: u.output_tokens || 0,
+                            cacheRead: u.cache_read_input_tokens || 0,
+                            cacheCreation: u.cache_creation_input_tokens || 0,
+                        };
+                        const isMoreComplete = newUsage.cacheRead > acc.thisMsgUsage.cacheRead
+                            || newUsage.cacheCreation > acc.thisMsgUsage.cacheCreation
+                            || newUsage.output > acc.thisMsgUsage.output;
+                        if (isMoreComplete) {
+                            // 累计值：减去旧 usage，加上新 usage
+                            acc.input += newUsage.input - acc.thisMsgUsage.input;
+                            acc.output += newUsage.output - acc.thisMsgUsage.output;
+                            acc.cacheRead += newUsage.cacheRead - acc.thisMsgUsage.cacheRead;
+                            acc.cacheCreation += newUsage.cacheCreation - acc.thisMsgUsage.cacheCreation;
+                            // thisQuery：同步更新（减旧加新）
+                            acc.thisQuery.input += newUsage.input - acc.thisMsgUsage.input;
+                            acc.thisQuery.cacheRead += newUsage.cacheRead - acc.thisMsgUsage.cacheRead;
+                            acc.thisQuery.cacheCreation += newUsage.cacheCreation - acc.thisMsgUsage.cacheCreation;
+                            acc.thisMsgUsage = newUsage;
+                        }
                     }
                     acc.lastMsgId = msgId;
                     // tool_use 计数（与去重无关，每个 block 在 transcript 中只出现一次）
@@ -282,6 +319,7 @@ function parseTranscriptTokens(transcriptPath) {
             lastModel: acc.lastModel,
             thisQuery: acc.thisQuery,
             lastMsgId: acc.lastMsgId,
+            thisMsgUsage: acc.thisMsgUsage,
         };
         writeTranscriptCache(result);
 
@@ -590,7 +628,7 @@ function formatTokenCount(n) {
 /** 根据百分比返回用量颜色（cc-switch 标准） */
 function getUsageColor(pct) {
     if (pct >= 90) return COLORS.red;       // 红色：≥90% 即将耗尽
-    if (pct >= 70) return '[38;5;208m'; // 橙色：70-89% 注意用量
+    if (pct >= 70) return '[38;5;208m'; // 橙色：70-89% 注意用量
     return COLORS.green;                    // 绿色：<70% 用量充足
 }
 
@@ -670,7 +708,7 @@ function formatKimiUsage(stats) {
     if (stats.weeklyPct != null) {
         const colorW = getUsageColor(stats.weeklyPct);
         const remainW = formatTimeRemaining(stats.weeklyResetTs);
-        parts.push(remainW ? `7d ${colorW}${stats.weeklyPct}% · ${remainW}${COLORS.reset}` : `7d ${colorW}${stats.weeklyPct}%${COLORS.reset}`);
+        parts.push(remainW ? `7d ${colorW}${stats.weeklyPct}% · ${remainW}${COLORS.reset}` : `7d ${colorW}${stats.weeklyPct}% · ${remainW}${COLORS.reset}`);
     }
 
     return parts.join('  ');
