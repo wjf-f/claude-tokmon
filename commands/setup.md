@@ -15,22 +15,23 @@ If empty, ask the user to install Node.js LTS from https://nodejs.org/ and resta
 
 ## Step 2: Find Plugin Path
 
-**macOS/Linux**:
+Verify the plugin is installed by checking for the latest `src/index.js`:
+
 ```bash
-ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/claude-tokmon/*/ 2>/dev/null | awk -F/ '{ print $(NF-1) "\t" $(0) }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+[[:space:]]' | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1 | cut -f2-
+ls -td ~/.claude/plugins/cache/claude-tokmon/claude-tokmon/*/src/index.js 2>/dev/null | head -1
 ```
 
 If empty, the plugin is not installed. Ask the user to install via `/plugin install claude-tokmon` first.
 
 ## Step 3: Generate and Test Command
 
-Generate the statusLine command:
+The statusLine command uses a simple glob to find the latest plugin version at runtime (survives plugin updates without config changes):
 
 ```
-bash -c 'plugin_dir=$(ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/claude-tokmon/*/ 2>/dev/null | awk -F/ '"'"'{ print $(NF-1) "\t" $(0) }'"'"' | grep -E '"'"'^[0-9]+\.[0-9]+\.[0-9]+[[:space:]]'"'"' | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1 | cut -f2-); exec "{RUNTIME_PATH}" "${plugin_dir}src/index.js"'
+bash -c 'exec {RUNTIME_PATH} "$(ls -td ~/.claude/plugins/cache/claude-tokmon/claude-tokmon/*/src/index.js 2>/dev/null | head -1)"'
 ```
 
-Replace `{RUNTIME_PATH}` with the detected Node.js absolute path.
+Replace `{RUNTIME_PATH}` with the detected Node.js absolute path from Step 1.
 
 Test the command - it should produce multi-line output within a few seconds:
 ```bash
