@@ -1,7 +1,7 @@
 {
   "name": "claude-tokmon",
   "description": "Token usage monitor for Claude Code - session token stats with cache breakdown, multi-platform quota tracking (GLM/Kimi/MiniMax)",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": {
     "name": "wjf"
   },

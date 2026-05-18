@@ -73,6 +73,15 @@ To override manually, set `TOKMON_LANG` environment variable:
 
 > **Current query** = from the last user input to now, including all LLM requests in the tool-call chain.
 
+### Session speed (Line 2, end)
+
+| Label (EN) | Label (ZH) | Meaning |
+|------------|------------|---------|
+| Spd | 速度 | Output token speed = total output tokens / total active time (tokens/s) |
+
+- **Active time** = merged non-overlapping intervals from user message to assistant response (idle gaps excluded)
+- Shown only when active time ≥ 1 second
+
 ## Platform quota tracking
 
 Auto-detected by `ANTHROPIC_BASE_URL` domain:

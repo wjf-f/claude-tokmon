@@ -95,8 +95,8 @@ const _locale = process.env.TOKMON_LANG
     || 'en';
 const LANG = _locale.toLowerCase();
 const I18N = LANG.startsWith('zh')
-    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', hitRate: '命中', cacheEff: '效率', requests: '请求', tools: '工具', compact: 'COMPACT', balance: '余额' }
-    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', hitRate: 'Hit', cacheEff: 'Eff', requests: 'Req', tools: 'Tools', compact: 'COMPACT', balance: 'Bal' };
+    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', hitRate: '命中', cacheEff: '效率', requests: '请求', tools: '工具', compact: 'COMPACT', balance: '余额', speed: '速度' }
+    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', hitRate: 'Hit', cacheEff: 'Eff', requests: 'Req', tools: 'Tools', compact: 'COMPACT', balance: 'Bal', speed: 'Spd' };
 
 // 256 色调色板（Powerline 风格）
 const COLORS = {
@@ -213,17 +213,19 @@ function parseTranscriptTokens(transcriptPath) {
             total: cached.input + cached.output + cached.cacheRead + cached.cacheCreation,
             lastModel: cached.lastModel || null,
             thisQuery: cached.thisQuery || null,
+            speedIntervals: cached.speedIntervals || [],
         };
     }
 
     // 老缓存可能缺 thisQuery（旧 schema）→ 触发全量重算，否则本轮统计会丢失 offset 之前的部分
     const cacheUsable = cached
         && cached.path === transcriptPath
-        && cached.thisQuery !== undefined;
+        && cached.thisQuery !== undefined
+        && cached.speedIntervals !== undefined;
     const offset = (cacheUsable && stat.size >= (cached.offset || 0)) ? (cached.offset || 0) : 0;
     const emptyQuery = () => ({ input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 });
     const acc = (offset === 0)
-        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null, thisMsgUsage: null }
+        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null, thisMsgUsage: null, speedIntervals: [], lastUserTs: null }
         : {
             input: cached.input || 0, output: cached.output || 0,
             cacheRead: cached.cacheRead || 0, cacheCreation: cached.cacheCreation || 0,
@@ -231,6 +233,8 @@ function parseTranscriptTokens(transcriptPath) {
             thisQuery: cached.thisQuery || emptyQuery(),
             lastMsgId: cached.lastMsgId || null,
             thisMsgUsage: cached.thisMsgUsage || null,
+            speedIntervals: cached.speedIntervals || [],
+            lastUserTs: cached.lastUserTs || null,
         };
 
     try {
@@ -256,6 +260,7 @@ function parseTranscriptTokens(transcriptPath) {
                     // 工具回执（content 是 tool_result 数组）不算 query 边界
                     acc.thisQuery = { input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 };
                     acc.lastMsgId = null;
+                    if (entry.timestamp) acc.lastUserTs = new Date(entry.timestamp).getTime();
                 } else if (entry.type === 'assistant' && entry.message?.usage) {
                     const u = entry.message.usage;
                     const msgId = entry.message.id || null;
@@ -281,6 +286,13 @@ function parseTranscriptTokens(transcriptPath) {
                         acc.thisQuery.cacheRead += acc.thisMsgUsage.cacheRead;
                         acc.thisQuery.cacheCreation += acc.thisMsgUsage.cacheCreation;
                         acc.thisQuery.requests += 1;
+                        // 速度区间：用户消息 → 助手响应
+                        if (entry.timestamp && acc.lastUserTs) {
+                            const endMs = new Date(entry.timestamp).getTime();
+                            if (endMs > acc.lastUserTs) {
+                                acc.speedIntervals.push({ startMs: acc.lastUserTs, endMs });
+                            }
+                        }
                     } else if (msgId && msgId === acc.lastMsgId && acc.thisMsgUsage) {
                         // 同 msgId → 判断是否有更完整的 usage
                         const newUsage = {
@@ -326,6 +338,8 @@ function parseTranscriptTokens(transcriptPath) {
             thisQuery: acc.thisQuery,
             lastMsgId: acc.lastMsgId,
             thisMsgUsage: acc.thisMsgUsage,
+            speedIntervals: acc.speedIntervals,
+            lastUserTs: acc.lastUserTs,
         };
         writeTranscriptCache(result);
 
@@ -335,6 +349,7 @@ function parseTranscriptTokens(transcriptPath) {
             total: acc.input + acc.output + acc.cacheRead + acc.cacheCreation,
             lastModel: acc.lastModel,
             thisQuery: acc.thisQuery,
+            speedIntervals: acc.speedIntervals,
         };
     } catch (_) {
         return null;
@@ -912,6 +927,23 @@ function formatTokens(n) {
     return String(n);
 }
 
+/** 合并重叠的时间区间（用于计算活跃时长） */
+function mergeIntervals(intervals) {
+    if (intervals.length === 0) return [];
+    const sorted = intervals.slice().sort((a, b) => a.startMs - b.startMs);
+    const merged = [{ ...sorted[0] }];
+    for (let i = 1; i < sorted.length; i++) {
+        const current = sorted[i];
+        const last = merged[merged.length - 1];
+        if (current.startMs <= last.endMs) {
+            last.endMs = Math.max(last.endMs, current.endMs);
+        } else {
+            merged.push({ ...current });
+        }
+    }
+    return merged;
+}
+
 // ===================== 主程序入口 =====================
 
 let input = '';
@@ -992,6 +1024,16 @@ process.stdin.on('end', async () => {
                     const effColor = getHitRateColor(effPct);
                     line2.push(`${effColor}${I18N.cacheEff}:${effPct}%${COLORS.reset}`);
                 }
+            }
+        }
+        // Token 速度：输出 tokens / 活跃时长（合并重叠区间后的净时间）
+        if (transcript.speedIntervals && transcript.speedIntervals.length > 0 && transcript.output > 0) {
+            const merged = mergeIntervals(transcript.speedIntervals);
+            const totalActiveMs = merged.reduce((sum, i) => sum + (i.endMs - i.startMs), 0);
+            if (totalActiveMs >= 1000) {
+                const speed = transcript.output / (totalActiveMs / 1000);
+                const speedStr = speed >= 100 ? String(Math.round(speed)) : speed.toFixed(1);
+                line2.push(`${COLORS.dim}${I18N.speed}:${COLORS.reset}${speedStr}t/s`);
             }
         }
     } else {
