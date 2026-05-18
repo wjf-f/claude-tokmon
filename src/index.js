@@ -260,8 +260,13 @@ function parseTranscriptTokens(transcriptPath) {
                     // 工具回执（content 是 tool_result 数组）不算 query 边界
                     acc.thisQuery = { input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 };
                     acc.lastMsgId = null;
-                    if (entry.timestamp) acc.lastUserTs = new Date(entry.timestamp).getTime();
-                } else if (entry.type === 'assistant' && entry.message?.usage) {
+                }
+                if (entry.type === 'user' && entry.timestamp) {
+                    // 所有 user 类型（含 tool_result）都更新时间戳，
+                    // 速度区间 = (上一个 user/tool_result) → assistant，排除工具执行等待
+                    acc.lastUserTs = new Date(entry.timestamp).getTime();
+                }
+                if (entry.type === 'assistant' && entry.message?.usage) {
                     const u = entry.message.usage;
                     const msgId = entry.message.id || null;
                     // 同一 msgId 可能有多条 entries（thinking/text/tool_use）。
