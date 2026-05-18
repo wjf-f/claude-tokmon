@@ -32,7 +32,7 @@ In:397.8k  Out:24.3k  CacheR:2.5M  Total:2.9M  Req:16  Tools:16  Hit:92%
 
 - **第 1 行** — 模型名、上下文进度条（CTX）、工作目录、Git 分支状态
 - **第 2 行** — 会话 Token 统计 + 本轮请求分析（请求次数、工具调用、缓存命中率）
-- **第 3 行** — 平台套餐用量（仅在 `ANTHROPIC_BASE_URL` 匹配 GLM/Kimi/MiniMax 时显示）
+- **第 3 行** — 平台套餐用量（仅在 `ANTHROPIC_BASE_URL` 匹配 GLM/Kimi/MiniMax/DeepSeek 时显示）
 
 ## 说明
 
@@ -84,6 +84,7 @@ In:397.8k  Out:24.3k  CacheR:2.5M  Total:2.9M  Req:16  Tools:16  Hit:92%
 | GLM（智谱/ZAI） | `bigmodel.cn` / `zhipu` / `z.ai` | 5h Token 配额、API 调用次数、周限量、MCP 用量 |
 | Kimi | `kimi.com` | 5h 窗口用量、周限量 |
 | MiniMax | `minimaxi.com` / `minimax.io` | 5h 区间用量/调用次数、周限量 |
+| DeepSeek | `deepseek.com` | 余额（CNY → ¥, USD → $）、赠金、充值 |
 
 颜色阈值：绿色 <70% / 橙色 70-89% / 红色 ≥90%
 

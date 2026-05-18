@@ -30,7 +30,7 @@ M:glm-5.1  CTX ████░░░░ 45%  │  D:my-project  󰊢 dev*
 
 - **Line 1** — Model, context progress bar (CTX), working directory, Git branch status
 - **Line 2** — Session token breakdown + per-query request analysis (requests, tool calls, cache hit rate)
-- **Line 3** — Platform quota usage (shown when `ANTHROPIC_BASE_URL` matches GLM/Kimi/MiniMax)
+- **Line 3** — Platform quota usage (shown when `ANTHROPIC_BASE_URL` matches GLM/Kimi/MiniMax/DeepSeek)
 
 ## How it works
 
@@ -82,6 +82,7 @@ Auto-detected by `ANTHROPIC_BASE_URL` domain:
 | GLM (Zhipu/ZAI) | `bigmodel.cn` / `zhipu` / `z.ai` | 5h token quota, API call count, weekly limit, MCP usage |
 | Kimi | `kimi.com` | 5h window usage, weekly limit |
 | MiniMax | `minimaxi.com` / `minimax.io` | 5h interval usage/calls, weekly limit |
+| DeepSeek | `deepseek.com` | Balance (CNY → ¥, USD → $), granted, topped-up |
 
 Color thresholds: green <70% / orange 70-89% / red ≥90%
 

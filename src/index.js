@@ -3,14 +3,14 @@
 // Claude Code 自定义 Statusline
 // ============================================================================
 // 基础功能：模型名、上下文进度条、工作目录、Git 分支状态、Token 统计、压缩警告
-// 用量追踪：GLM（智谱/ZAI）、Kimi、MiniMax 三平台套餐用量实时显示
+// 用量追踪：GLM（智谱/ZAI）、Kimi、MiniMax、DeepSeek 四平台套餐用量实时显示
 // 参考：https://github.com/zwen64657/glm-plan-usage2
 // ============================================================================
 //
 // 输出格式示例（多行）：
 //   第 1 行：M:glm-4 ████░░░░ 45% │ D:Lancet2 dev*
 //   第 2 行：输入:1.5k 输出:800 读缓存:170.0k 写缓存:7.0k 总计:178.1k
-//   第 3 行：5h 3% · 1h28m  12次  7d 15% · 2d7h  MCP 50/300  3.38M（仅 GLM/Kimi/MiniMax）
+//   第 3 行：5h 3% · 1h28m  12次  7d 15% · 2d7h  MCP 50/300  3.38M（仅 GLM/Kimi/MiniMax/DeepSeek）
 //
 // 各段说明：
 //   第 1 行：
@@ -33,6 +33,7 @@
 //   bigmodel.cn / zhipu / z.ai          → GLM
 //   kimi.com                            → Kimi
 //   minimaxi.com / minimax.io           → MiniMax
+//   deepseek.com                        → DeepSeek（余额显示）
 //
 // 【GLM - 智谱/ZAI】
 //   🪙 N% (⏰ HH:MM)       - 5h Token 配额使用率 + 下次重置时间
@@ -57,9 +58,16 @@
 //   📅 N%                   - 周用量百分比（仅新套餐有，老套餐 weekly_total=0 无此项）
 //   颜色规则：绿色 <80% / 黄色 80-94% / 红色 ≥95%
 //
+//
+// 【DeepSeek】
+//   Bal ¥12.34              - 余额显示（CNY → ¥, USD → $）
+//   赠金 ¥5.00              - 未过期赠金（> 0 时显示）
+//   充值 ¥7.34              - 充值余额（> 0 时显示）
+//   余额 > 0 绿色，否则红色
+//
 // 环境变量配置：
-//   ANTHROPIC_AUTH_TOKEN     - API 认证 Token（GLM/MiniMax/Kimi 都可用）
-//   ANTHROPIC_API_KEY        - API Key（Kimi 优先使用，不存在时尝试 AUTH_TOKEN）
+//   ANTHROPIC_AUTH_TOKEN     - API 认证 Token（GLM/MiniMax/Kimi/DeepSeek 都可用）
+//   ANTHROPIC_API_KEY        - API Key（Kimi/DeepSeek 优先使用，不存在时尝试 AUTH_TOKEN）
 //   ANTHROPIC_BASE_URL       - API 基础地址（用于自动检测平台）
 //   GLM_API_TOKEN            - GLM API Token（可选，覆盖 ANTHROPIC_AUTH_TOKEN）
 //   GLM_API_URL              - GLM 监控 API 地址（可选，代理场景下手动指定）
@@ -89,8 +97,8 @@ const _locale = process.env.TOKMON_LANG
     || 'en';
 const LANG = _locale.toLowerCase();
 const I18N = LANG.startsWith('zh')
-    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', hitRate: '命中', cacheEff: '效率', requests: '请求', tools: '工具', compact: 'COMPACT' }
-    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', hitRate: 'Hit', cacheEff: 'Eff', requests: 'Req', tools: 'Tools', compact: 'COMPACT' };
+    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', hitRate: '命中', cacheEff: '效率', requests: '请求', tools: '工具', compact: 'COMPACT', balance: '余额', granted: '赠金', topup: '充值' }
+    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', hitRate: 'Hit', cacheEff: 'Eff', requests: 'Req', tools: 'Tools', compact: 'COMPACT', balance: 'Bal', granted: 'Granted', topup: 'Top-up' };
 
 // 256 色调色板（Powerline 风格）
 const COLORS = {
@@ -615,6 +623,58 @@ async function fetchMiniMaxUsage() {
     }
 }
 
+// ===================== DeepSeek 余额追踪 =====================
+//
+// 检测条件：ANTHROPIC_BASE_URL 包含 deepseek.com
+// Token 来源：ANTHROPIC_API_KEY 或 ANTHROPIC_AUTH_TOKEN
+// API 端点：https://api.deepseek.com/user/balance
+//
+// 响应字段：
+//   is_available      - boolean, 账户是否有余额可用
+//   balance_infos[]   - 余额明细
+//     currency         - "CNY" | "USD"
+//     total_balance    - 总的可用余额（含赠金和充值）
+//     granted_balance  - 未过期的赠金余额
+//     topped_up_balance - 充值余额
+
+/** 获取 DeepSeek 余额（含缓存） */
+async function fetchDeepSeekUsage() {
+    const cached = readCache('deepseek');
+    if (cached) return cached;
+
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+    if (!baseUrl.includes('deepseek.com')) return null;
+
+    const token = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
+    if (!token) return null;
+
+    try {
+        const headers = {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/json',
+        };
+
+        const resp = await httpGet('https://api.deepseek.com/user/balance', headers);
+        if (resp.status !== 200) return null;
+        const body = JSON.parse(resp.data);
+
+        const stats = {
+            isAvailable: body.is_available === true,
+            balances: (body.balance_infos || []).map(b => ({
+                currency: b.currency || 'CNY',
+                total: parseFloat(b.total_balance) || 0,
+                granted: parseFloat(b.granted_balance) || 0,
+                toppedUp: parseFloat(b.topped_up_balance) || 0,
+            })),
+        };
+
+        writeCache('deepseek', stats);
+        return stats;
+    } catch (_) {
+        return null;
+    }
+}
+
 // ===================== 用量格式化工具 =====================
 
 /** Token 数量格式化：>=1M 显示 M，>=10K 显示 K，否则原值 */
@@ -732,6 +792,33 @@ function formatMiniMaxUsage(stats) {
         const colorW = getUsageColor(stats.weeklyPct);
         const remainW = formatTimeRemaining(stats.weeklyResetTs);
         parts.push(remainW ? `7d ${colorW}${stats.weeklyPct}% · ${remainW}${COLORS.reset}` : `7d ${colorW}${stats.weeklyPct}%${COLORS.reset}`);
+    }
+
+    return parts.join('  ');
+}
+
+/** 格式化 DeepSeek 余额为 statusline 文本 */
+function formatDeepSeekUsage(stats) {
+    if (!stats || !stats.balances || stats.balances.length === 0) return null;
+    const parts = [];
+    const currencySymbol = (c) => c === 'CNY' ? '¥' : '$';
+
+    for (const b of stats.balances) {
+        const sym = currencySymbol(b.currency);
+        // 显示总余额，余额 > 0 绿色，否则红色
+        const color = b.total > 0 ? COLORS.green : COLORS.red;
+        parts.push(`${I18N.balance} ${color}${sym}${b.total.toFixed(2)}${COLORS.reset}`);
+        // 赠金和充值只在非零时显示
+        if (b.granted > 0) {
+            parts.push(`${I18N.granted} ${sym}${b.granted.toFixed(2)}`);
+        }
+        if (b.toppedUp > 0) {
+            parts.push(`${I18N.topup} ${sym}${b.toppedUp.toFixed(2)}`);
+        }
+    }
+
+    if (!stats.isAvailable) {
+        parts.push(`${COLORS.red}不可用${COLORS.reset}`);
     }
 
     return parts.join('  ');
@@ -941,6 +1028,8 @@ process.stdin.on('end', async () => {
         usageLine = formatKimiUsage(await fetchKimiUsage());
     } else if (baseUrl.includes('minimaxi.com') || baseUrl.includes('minimax.io')) {
         usageLine = formatMiniMaxUsage(await fetchMiniMaxUsage());
+    } else if (baseUrl.includes('deepseek.com')) {
+        usageLine = formatDeepSeekUsage(await fetchDeepSeekUsage());
     }
 
     if (usageLine) {
