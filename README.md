@@ -77,9 +77,10 @@ To override manually, set `TOKMON_LANG` environment variable:
 
 | Label (EN) | Label (ZH) | Meaning |
 |------------|------------|---------|
-| Spd | 速度 | Output token speed = total output tokens / total active time (tokens/s) |
+| Spd | 速度 | Output token speed over the last 2 minutes (tokens/s) |
 
-- **Active time** = merged non-overlapping intervals from user message to assistant response (idle gaps excluded)
+- **Rolling window**: only counts requests whose assistant response completed within the last 2 minutes
+- **Active time** = merged non-overlapping intervals (user message → assistant response), no clipping — actual duration is used
 - Shown only when active time ≥ 1 second
 
 ## Platform quota tracking

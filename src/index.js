@@ -213,7 +213,7 @@ function parseTranscriptTokens(transcriptPath) {
             total: cached.input + cached.output + cached.cacheRead + cached.cacheCreation,
             lastModel: cached.lastModel || null,
             thisQuery: cached.thisQuery || null,
-            speedIntervals: cached.speedIntervals || [],
+            speedRequests: cached.speedRequests || [],
         };
     }
 
@@ -221,11 +221,11 @@ function parseTranscriptTokens(transcriptPath) {
     const cacheUsable = cached
         && cached.path === transcriptPath
         && cached.thisQuery !== undefined
-        && cached.speedIntervals !== undefined;
+        && cached.speedRequests !== undefined;
     const offset = (cacheUsable && stat.size >= (cached.offset || 0)) ? (cached.offset || 0) : 0;
     const emptyQuery = () => ({ input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 });
     const acc = (offset === 0)
-        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null, thisMsgUsage: null, speedIntervals: [], lastUserTs: null }
+        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null, thisMsgUsage: null, speedRequests: [], lastUserTs: null }
         : {
             input: cached.input || 0, output: cached.output || 0,
             cacheRead: cached.cacheRead || 0, cacheCreation: cached.cacheCreation || 0,
@@ -233,7 +233,7 @@ function parseTranscriptTokens(transcriptPath) {
             thisQuery: cached.thisQuery || emptyQuery(),
             lastMsgId: cached.lastMsgId || null,
             thisMsgUsage: cached.thisMsgUsage || null,
-            speedIntervals: cached.speedIntervals || [],
+            speedRequests: cached.speedRequests || [],
             lastUserTs: cached.lastUserTs || null,
         };
 
@@ -286,11 +286,11 @@ function parseTranscriptTokens(transcriptPath) {
                         acc.thisQuery.cacheRead += acc.thisMsgUsage.cacheRead;
                         acc.thisQuery.cacheCreation += acc.thisMsgUsage.cacheCreation;
                         acc.thisQuery.requests += 1;
-                        // 速度区间：用户消息 → 助手响应
+                        // 速度请求：记录区间 + 输出 tokens
                         if (entry.timestamp && acc.lastUserTs) {
                             const endMs = new Date(entry.timestamp).getTime();
                             if (endMs > acc.lastUserTs) {
-                                acc.speedIntervals.push({ startMs: acc.lastUserTs, endMs });
+                                acc.speedRequests.push({ startMs: acc.lastUserTs, endMs, outputTokens: u.output_tokens || 0 });
                             }
                         }
                     } else if (msgId && msgId === acc.lastMsgId && acc.thisMsgUsage) {
@@ -315,6 +315,9 @@ function parseTranscriptTokens(transcriptPath) {
                             acc.thisQuery.cacheRead += newUsage.cacheRead - acc.thisMsgUsage.cacheRead;
                             acc.thisQuery.cacheCreation += newUsage.cacheCreation - acc.thisMsgUsage.cacheCreation;
                             acc.thisMsgUsage = newUsage;
+                            // 同步更新 speedRequests 最后一条的 outputTokens
+                            const lastReq = acc.speedRequests[acc.speedRequests.length - 1];
+                            if (lastReq) lastReq.outputTokens = newUsage.output;
                         }
                     }
                     acc.lastMsgId = msgId;
@@ -338,7 +341,7 @@ function parseTranscriptTokens(transcriptPath) {
             thisQuery: acc.thisQuery,
             lastMsgId: acc.lastMsgId,
             thisMsgUsage: acc.thisMsgUsage,
-            speedIntervals: acc.speedIntervals,
+            speedRequests: acc.speedRequests,
             lastUserTs: acc.lastUserTs,
         };
         writeTranscriptCache(result);
@@ -349,7 +352,7 @@ function parseTranscriptTokens(transcriptPath) {
             total: acc.input + acc.output + acc.cacheRead + acc.cacheCreation,
             lastModel: acc.lastModel,
             thisQuery: acc.thisQuery,
-            speedIntervals: acc.speedIntervals,
+            speedRequests: acc.speedRequests,
         };
     } catch (_) {
         return null;
@@ -1026,14 +1029,23 @@ process.stdin.on('end', async () => {
                 }
             }
         }
-        // Token 速度：输出 tokens / 活跃时长（合并重叠区间后的净时间）
-        if (transcript.speedIntervals && transcript.speedIntervals.length > 0 && transcript.output > 0) {
-            const merged = mergeIntervals(transcript.speedIntervals);
-            const totalActiveMs = merged.reduce((sum, i) => sum + (i.endMs - i.startMs), 0);
-            if (totalActiveMs >= 1000) {
-                const speed = transcript.output / (totalActiveMs / 1000);
-                const speedStr = speed >= 100 ? String(Math.round(speed)) : speed.toFixed(1);
-                line2.push(`${COLORS.dim}${I18N.speed}:${COLORS.reset}${speedStr}t/s`);
+        // Token 速度：最近 2 分钟内完成的请求，输出 tokens / 完整活跃时长
+        if (transcript.speedRequests && transcript.speedRequests.length > 0) {
+            const windowMs = 120_000; // 2 分钟
+            const windowStart = Date.now() - windowMs;
+            const windowed = transcript.speedRequests.filter(r => r.endMs >= windowStart);
+            if (windowed.length > 0) {
+                const windowedOutput = windowed.reduce((sum, r) => sum + r.outputTokens, 0);
+                const intervals = windowed.filter(r => r.endMs > r.startMs);
+                if (intervals.length > 0) {
+                    const merged = mergeIntervals(intervals);
+                    const totalActiveMs = merged.reduce((sum, i) => sum + (i.endMs - i.startMs), 0);
+                    if (totalActiveMs >= 1000 && windowedOutput > 0) {
+                        const speed = windowedOutput / (totalActiveMs / 1000);
+                        const speedStr = speed >= 100 ? String(Math.round(speed)) : speed.toFixed(1);
+                        line2.push(`${COLORS.dim}${I18N.speed}:${COLORS.reset}${speedStr}t/s`);
+                    }
+                }
             }
         }
     } else {
