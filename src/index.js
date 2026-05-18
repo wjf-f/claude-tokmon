@@ -61,8 +61,6 @@
 //
 // 【DeepSeek】
 //   Bal ¥12.34              - 余额显示（CNY → ¥, USD → $）
-//   赠金 ¥5.00              - 未过期赠金（> 0 时显示）
-//   充值 ¥7.34              - 充值余额（> 0 时显示）
 //   余额 > 0 绿色，否则红色
 //
 // 环境变量配置：
@@ -97,8 +95,8 @@ const _locale = process.env.TOKMON_LANG
     || 'en';
 const LANG = _locale.toLowerCase();
 const I18N = LANG.startsWith('zh')
-    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', hitRate: '命中', cacheEff: '效率', requests: '请求', tools: '工具', compact: 'COMPACT', balance: '余额', granted: '赠金', topup: '充值' }
-    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', hitRate: 'Hit', cacheEff: 'Eff', requests: 'Req', tools: 'Tools', compact: 'COMPACT', balance: 'Bal', granted: 'Granted', topup: 'Top-up' };
+    ? { input: '输入', output: '输出', cacheRead: '读缓存', cacheCreation: '写缓存', total: '总计', hitRate: '命中', cacheEff: '效率', requests: '请求', tools: '工具', compact: 'COMPACT', balance: '余额' }
+    : { input: 'In', output: 'Out', cacheRead: 'CacheR', cacheCreation: 'CacheW', total: 'Total', hitRate: 'Hit', cacheEff: 'Eff', requests: 'Req', tools: 'Tools', compact: 'COMPACT', balance: 'Bal' };
 
 // 256 色调色板（Powerline 风格）
 const COLORS = {
@@ -805,20 +803,12 @@ function formatDeepSeekUsage(stats) {
 
     for (const b of stats.balances) {
         const sym = currencySymbol(b.currency);
-        // 显示总余额，余额 > 0 绿色，否则红色
         const color = b.total > 0 ? COLORS.green : COLORS.red;
         parts.push(`${I18N.balance} ${color}${sym}${b.total.toFixed(2)}${COLORS.reset}`);
-        // 赠金和充值只在非零时显示
-        if (b.granted > 0) {
-            parts.push(`${I18N.granted} ${sym}${b.granted.toFixed(2)}`);
-        }
-        if (b.toppedUp > 0) {
-            parts.push(`${I18N.topup} ${sym}${b.toppedUp.toFixed(2)}`);
-        }
     }
 
     if (!stats.isAvailable) {
-        parts.push(`${COLORS.red}不可用${COLORS.reset}`);
+        parts.push(` ${COLORS.red}不可用${COLORS.reset}`);
     }
 
     return parts.join('  ');

@@ -84,7 +84,7 @@ In:397.8k  Out:24.3k  CacheR:2.5M  Total:2.9M  Req:16  Tools:16  Hit:92%
 | GLM（智谱/ZAI） | `bigmodel.cn` / `zhipu` / `z.ai` | 5h Token 配额、API 调用次数、周限量、MCP 用量 |
 | Kimi | `kimi.com` | 5h 窗口用量、周限量 |
 | MiniMax | `minimaxi.com` / `minimax.io` | 5h 区间用量/调用次数、周限量 |
-| DeepSeek | `deepseek.com` | 余额（CNY → ¥, USD → $）、赠金、充值 |
+| DeepSeek | `deepseek.com` | 余额（CNY → ¥, USD → $） |
 
 颜色阈值：绿色 <70% / 橙色 70-89% / 红色 ≥90%
 

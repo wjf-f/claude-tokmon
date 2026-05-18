@@ -82,7 +82,7 @@ Auto-detected by `ANTHROPIC_BASE_URL` domain:
 | GLM (Zhipu/ZAI) | `bigmodel.cn` / `zhipu` / `z.ai` | 5h token quota, API call count, weekly limit, MCP usage |
 | Kimi | `kimi.com` | 5h window usage, weekly limit |
 | MiniMax | `minimaxi.com` / `minimax.io` | 5h interval usage/calls, weekly limit |
-| DeepSeek | `deepseek.com` | Balance (CNY → ¥, USD → $), granted, topped-up |
+| DeepSeek | `deepseek.com` | Balance (CNY → ¥, USD → $) |
 
 Color thresholds: green <70% / orange 70-89% / red ≥90%
 
