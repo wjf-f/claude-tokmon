@@ -214,6 +214,8 @@ function parseTranscriptTokens(transcriptPath) {
             lastModel: cached.lastModel || null,
             thisQuery: cached.thisQuery || null,
             speedRequests: cached.speedRequests || [],
+            firstTs: cached.firstTs || null,
+            compactCount: cached.compactCount || 0,
         };
     }
 
@@ -225,7 +227,7 @@ function parseTranscriptTokens(transcriptPath) {
     const offset = (cacheUsable && stat.size >= (cached.offset || 0)) ? (cached.offset || 0) : 0;
     const emptyQuery = () => ({ input: 0, cacheRead: 0, cacheCreation: 0, requests: 0, tools: 0 });
     const acc = (offset === 0)
-        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null, thisMsgUsage: null, speedRequests: [], lastUserTs: null }
+        ? { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, lastModel: null, thisQuery: emptyQuery(), lastMsgId: null, thisMsgUsage: null, speedRequests: [], lastUserTs: null, firstTs: null, compactCount: 0 }
         : {
             input: cached.input || 0, output: cached.output || 0,
             cacheRead: cached.cacheRead || 0, cacheCreation: cached.cacheCreation || 0,
@@ -235,6 +237,8 @@ function parseTranscriptTokens(transcriptPath) {
             thisMsgUsage: cached.thisMsgUsage || null,
             speedRequests: cached.speedRequests || [],
             lastUserTs: cached.lastUserTs || null,
+            firstTs: cached.firstTs || null,
+            compactCount: cached.compactCount || 0,
         };
 
     try {
@@ -255,6 +259,8 @@ function parseTranscriptTokens(transcriptPath) {
             if (!line.trim()) continue;
             try {
                 const entry = JSON.parse(line);
+                if (!acc.firstTs && entry.timestamp) acc.firstTs = new Date(entry.timestamp).getTime();
+                if (entry.compactMetadata) acc.compactCount += 1;
                 if (entry.type === 'user' && typeof entry.message?.content === 'string') {
                     // 真实用户输入（content 是字符串）→ 开启新一轮 query，重置本轮统计
                     // 工具回执（content 是 tool_result 数组）不算 query 边界
@@ -348,6 +354,8 @@ function parseTranscriptTokens(transcriptPath) {
             thisMsgUsage: acc.thisMsgUsage,
             speedRequests: acc.speedRequests,
             lastUserTs: acc.lastUserTs,
+            firstTs: acc.firstTs,
+            compactCount: acc.compactCount,
         };
         writeTranscriptCache(result);
 
@@ -358,6 +366,8 @@ function parseTranscriptTokens(transcriptPath) {
             lastModel: acc.lastModel,
             thisQuery: acc.thisQuery,
             speedRequests: acc.speedRequests,
+            firstTs: acc.firstTs,
+            compactCount: acc.compactCount,
         };
     } catch (_) {
         return null;
@@ -839,7 +849,7 @@ function formatDeepSeekUsage(stats) {
 
 // ===================== 基础 Statusline 组件 =====================
 
-/** 获取 Git 分支信息及工作区状态 */
+/** 获取 Git 分支信息及工作区状态（含增删行数） */
 function getGitInfo(cwd) {
     try {
         const branch = execSync('git --no-optional-locks branch --show-current', {
@@ -866,10 +876,33 @@ function getGitInfo(cwd) {
             indicator = '?';
         }
 
-        return { branch, color, indicator };
+        // 增删行数统计（未暂存改动）
+        let insertions = 0, deletions = 0;
+        try {
+            const diffStat = execSync('git --no-optional-locks diff --shortstat', {
+                cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']
+            });
+            const m = diffStat.match(/(\d+) insertion/);
+            const d = diffStat.match(/(\d+) deletion/);
+            if (m) insertions = parseInt(m[1], 10);
+            if (d) deletions = parseInt(d[1], 10);
+        } catch (_) {}
+
+        return { branch, color, indicator, insertions, deletions };
     } catch (_) {
         return null;
     }
+}
+
+/** 格式化会话时长 */
+function formatDuration(ms) {
+    if (!ms || ms <= 0) return null;
+    const mins = Math.floor(ms / 60000);
+    if (mins < 1) return '<1m';
+    const hrs = Math.floor(mins / 60);
+    const rem = mins % 60;
+    if (hrs === 0) return rem + 'm';
+    return hrs + 'h' + rem + 'm';
 }
 
 /** 计算上下文窗口使用百分比 */
@@ -905,7 +938,7 @@ function coloredBar(pct, width = 8) {
     const filled = Math.round((pct / 100) * width);
     const empty = width - filled;
     const color = getBarColor(pct);
-    return `${color}${'█'.repeat(filled)}${'░'.repeat(empty)}${COLORS.reset}`;
+    return `${color}${'▰'.repeat(filled)}${'▱'.repeat(empty)}${COLORS.reset}`;
 }
 
 /** 分隔符 */
@@ -994,10 +1027,21 @@ process.stdin.on('end', async () => {
     line1.push(`${COLORS.dim}D:${COLORS.reset}${COLORS.cyan}${dirShort}${COLORS.reset}`);
     if (gitInfo) {
         line1.push(`${gitInfo.color}${ICONS.branch} ${gitInfo.branch}${gitInfo.indicator}${COLORS.reset}`);
+        // 增删行数（有改动时显示）
+        if (gitInfo.insertions > 0 || gitInfo.deletions > 0) {
+            const diffParts = [];
+            if (gitInfo.insertions > 0) diffParts.push(`${COLORS.green}+${gitInfo.insertions}${COLORS.reset}`);
+            if (gitInfo.deletions > 0) diffParts.push(`${COLORS.red}-${gitInfo.deletions}${COLORS.reset}`);
+            line1.push(diffParts.join(' '));
+        }
     }
     // 紧急压缩警告（≥95% 时显示）
     if (pct >= 95) {
         line1.push(`${COLORS.red}${ICONS.fire} ${I18N.compact}${COLORS.reset}`);
+    }
+    // 压缩次数
+    if (transcript && transcript.compactCount > 0) {
+        line1.push(`${COLORS.yellow}C:${transcript.compactCount}${COLORS.reset}`);
     }
 
     console.log(line1.join(' '));
