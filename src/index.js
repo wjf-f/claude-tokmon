@@ -461,36 +461,31 @@ async function fetchGlmUsage() {
             tokensUsed: null,   // 5h Token 消耗总量（需第二个 API 获取）
         };
 
-        // 2. 获取模型调用次数和 Token 消耗（时间窗口与配额窗口同步）
-        if (stats.tokenUsage?.resetAt) {
-            const resetMs = stats.tokenUsage.resetAt * 1000;
-            const startDate = new Date(resetMs - 5 * 3600000); // 5h 前
-            const resetDate = new Date(resetMs);
+        // 2. 获取模型调用次数和 Token 消耗
+        //    窗口优先与配额窗口对齐(pro/max 有 nextResetTime);
+        //    lite 套餐不返回 nextResetTime 时,退回 now-5h→now 的真实滚动窗口(不估算 nextResetTime)
+        const resetMs = stats.tokenUsage?.resetAt ? stats.tokenUsage.resetAt * 1000 : null;
+        const windowEnd = resetMs ?? Date.now();
+        const startDate = new Date(windowEnd - 5 * 3600000);
+        const endDate = new Date(windowEnd);
 
-            // 智谱用 UTC+8，ZAI 用 UTC
-            const isZai = apiUrl.includes('z.ai');
-            const tzOffset = isZai ? 0 : 8;
+        // API 把 startTime/endTime 字符串按 UTC 解释(实测:UTC 字符串单调性通过、数值合理;
+        // 用北京时间字符串会让窗口被偏移到错误的桶)。x_time 数组才是按北京时区展示,与过滤无关。
+        const pad = n => String(n).padStart(2, '0');
+        const fmtUtc = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
 
-            const pad = n => String(n).padStart(2, '0');
-            const toLocal = (d) => {
-                const utc = d.getTime() + d.getTimezoneOffset() * 60000;
-                return new Date(utc + tzOffset * 3600000);
-            };
-            const fmtDt = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        const startStr = fmtUtc(startDate);
+        const endStr = fmtUtc(endDate);
 
-            const startStr = fmtDt(toLocal(startDate));
-            const endStr = fmtDt(toLocal(resetDate));
-
-            const modelUrl = `${apiUrl}/monitor/usage/model-usage?startTime=${encodeURIComponent(startStr)}&endTime=${encodeURIComponent(endStr)}`;
-            const modelResp = await httpGet(modelUrl, headers);
-            if (modelResp.status === 200) {
-                const modelData = JSON.parse(modelResp.data);
-                // 兼容两种字段命名：totalUsage（驼峰）和 total_usage（下划线）
-                const total = modelData.data?.totalUsage || modelData.data?.total_usage;
-                if (total) {
-                    stats.callCount = total.totalModelCallCount || null;   // 5h 内 API 调用次数
-                    stats.tokensUsed = total.totalTokensUsage || null;     // 5h 内 Token 消耗总量
-                }
+        const modelUrl = `${apiUrl}/monitor/usage/model-usage?startTime=${encodeURIComponent(startStr)}&endTime=${encodeURIComponent(endStr)}`;
+        const modelResp = await httpGet(modelUrl, headers);
+        if (modelResp.status === 200) {
+            const modelData = JSON.parse(modelResp.data);
+            // 兼容两种字段命名：totalUsage（驼峰）和 total_usage（下划线）
+            const total = modelData.data?.totalUsage || modelData.data?.total_usage;
+            if (total) {
+                stats.callCount = total.totalModelCallCount || null;   // 5h 内 API 调用次数
+                stats.tokensUsed = total.totalTokensUsage || null;     // 5h 内 Token 消耗总量
             }
         }
 
